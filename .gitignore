@@ -1,0 +1,11 @@
+.vscode
+Manifest.toml
+\outputs
+
+# gfx
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
