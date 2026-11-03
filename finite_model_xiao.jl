@@ -18,7 +18,7 @@ m_wall = 3.714 # Mass of the tank wall / kg
 k_wall = 13 # Thermal conductivity of the tank wall / W/m K
 
 # Inputs needed for the coefficient_matrix function
-dr = (1 / 2)^5 * 0.0025 # Radial step size / m
+dr = (1 / 2)^2 * 0.0025 # Radial step size / m
 U = 36 * 1 # Heat transfer coefficient / W/(m²·K)
 
 # Tank surface areas
