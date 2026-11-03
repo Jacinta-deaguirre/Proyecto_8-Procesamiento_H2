@@ -1,4 +1,4 @@
-using Revise
+ENV["GKSwstype"] = "100" # headless plotting
 using HydrogenAdsorption
 using Sundials
 using Statistics

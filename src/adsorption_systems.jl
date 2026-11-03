@@ -35,12 +35,14 @@ end
 """
 Struct to hold the material properties of the hydrogen tank and the adsorbent material.
 This struct includes properties for both the activated carbon adsorbent and the hydrogen gas, as well as effective properties that are derived from these materials.
+`mₛ` must be the adsorbent mass implied by the bed, ρₛ (1 - ε_b) V, so that the energy and
+mass balances use the same adsorbent mass.
 """
 struct MaterialProperties
     # Activated carbon properties
     ρₛ::Float64        # Density of the solid phase / kg/m³
     cₛ::Float64        # Specific heat capacity of the solid phase / J/(kg·K)
-    mₛ::Float64        # Mass of the solid phase / kg
+    mₛ::Float64        # Mass of the solid phase = ρₛ (1 - ε_b) V / kg
     kₛ::Float64        # Thermal conductivity of the solid phase / W/(m·K)
     ε_b::Float64       # Bulk porosity of the material
 
@@ -62,7 +64,7 @@ It also includes the steel thermophysical properties.
 """
 struct GeometricParameters
     n_r::Int                # Number of radial nodes
-    dr::Float64             # Radial step size / m
+    dr::Float64             # Radial step size (actual grid spacing r[2]-r[1]) / m
     V::Float64              # Volume of the tank / m³
     L::Float64              # Length of the tank / m
     A::Matrix{Float64}      # Coefficient matrix for the spatial discretization
@@ -84,9 +86,9 @@ Struct to hold the operational parameters of the hydrogen tank system.
 This struct includes parameters such as the heat transfer coefficient and the mass flow rate of hydrogen into the tank.
 """
 struct OperationalParameters
-    U::Float64      # Heat transfer coefficient / W/(m²·K)
-    T_air::Float64  # Ambient temperature / K
-    m_in            # Mass flow rate of hydrogen into the tank / kg/s
+    U::Float64      # External heat transfer coefficient (wall-bath) / W/(m²·K)
+    T_air::Float64  # Temperature of the external fluid (water bath) / K
+    m_in            # Mass flow rate of hydrogen into the tank (negative for discharge) / kg/s
     T_gas::Float64  # Temperature of the incoming hydrogen gas / K
 end
 
@@ -119,11 +121,13 @@ function adsorption_isotherm(params::MDAParameters, P, T)
     β = params.β        # Entropic Factor / J/mol K
     m = params.m        # Exponent in the isotherm equation
 
-    # Other constants
-    R = 8.314 # Universal gas constant / J/(mol·K)
+    # Universal gas constant / J/(mol·K)
+    R = 8.314
 
     # Modified Dubinin-Astakov isotherm equation
-    nₐ = n₀ .* exp.(-(R .* T ./ (α .+ β .* T)) .^ m .* (log.(p₀ ./ P)) .^ m)
+    # P is clamped to a small positive value so that a rejected trial step of the DAE solver
+    # (which may probe P < 0) does not throw a DomainError; it has no effect on valid states.
+    nₐ = n₀ .* exp.(-(R .* T ./ (α .+ β .* T)) .^ m .* (log.(p₀ ./ max.(P, 1.0))) .^ m)
 
     return nₐ
 end
@@ -151,8 +155,8 @@ function adsorption_isotherm(params::DAParameters, P, T)
     γ = params.γ
     m = params.m            # Exponent in the isotherm equation
 
-    # Other constants
-    R = 8.314 # Universal gas constant / J/(mol·K)
+    # Universal gas constant / J/(mol·K)
+    R = 8.314
 
     # Calculate Parameters
     n_0 = ψ .+ β .* T
@@ -167,12 +171,12 @@ end
 """
     Function to compute the isosteric heat of adsorption based on the isotherm parameters.
     This function implements the Dubinin Astakov equation.
-    
+
     Inputs:
     - `params`: An instance of `MDAParameters` containing the isotherm parameters.
     - `P`: Pressure in the tank / Pa
     - `T`: Temperature in the tank / K
-    
+
     Outputs:
     - `dH`: Isosteric heat of adsorption / J/mol
     """
@@ -183,129 +187,147 @@ function isosteric_heat_of_adsorption(params::MDAParameters, P, T)
     m = params.m        # Exponent in the isotherm equation
 
     # Calculate the isosteric heat of adsorption
-    dH = α .* ((log.(n₀ ./ adsorption_isotherm(params, P, T))) .^ (1 / m))
+    dH = α .* ((log.(n₀ ./ min.(adsorption_isotherm(params, P, T), 0.999 * n₀))) .^ (1 / m))
 
     return dH
 end
 
 """
-System of differential equations for the adsorption process in a hydrogen tank. 
-This function computes the time derivative of the state variables, which include temperature, adsorption amount, average density, pressure, and local densities.
-It uses the method of lines to discretize the spatial domain and solve the system of equations.
+DAE residual of the 1-D radial model (method of lines), `out = F(du, u, p, t)`, with
+`p::AdsorptionParameters`. This is the single definition of the model used by every script.
 
-This system in particular uses the Modified Dubinin-Astakov isotherm for adsorption, which is suitable for hydrogen storage applications.
+State vector `u` (length 3 n_r + 3):
+- `u[1:n_r]`            bed temperature at each radial node, T / K (differential; node 1
+                        is the symmetry condition, node n_r the bed-wall interface, both
+                        algebraic constraints)
+- `u[n_r+1:2n_r]`       absolute adsorption at each node, n_a / mol/kg (algebraic, Eq. 1)
+- `u[2n_r+1]`           volume-averaged gas density ρ̄ / kg/m³ (differential, Eq. 3)
+- `u[2n_r+2]`           pressure P / Pa (algebraic: P = ρ̄ R_H2 T_H, T_H = 1/<1/T>)
+- `u[2n_r+3:3n_r+2]`    local gas density at each node (algebraic, local ideal gas)
+- `u[3n_r+3]`           lumped wall temperature T_w / K (differential, Eq. 8)
 
-Inputs
-- `out`: Output array
-- `du`: Array containing the current time derivatives of the state variables.
-- `u`: Current state of the system, including temperature, adsorption amount, average density, pressure, and local densities.
-- `p`: Parameters for the system
-- `t`: Current time (not used in this function, but included for compatibility with ODE solvers).
-
-Outputs: The function modifies the `out` array in place
-
-Description of variables:
-- `T`: Array of dimension `n_r` representing the temperature at each radial node
-- `nₐ`: Array of dimension `n_r` representing the adsorption amount at each radial node
-- `ρ_avg`: Average density of hydrogen in the tank
-- `P`: Pressure in the tank
-- `ρ`: Array of dimension `n_r` representing the local densities of hydrogen at each radial node
+Equations:
+- energy balance (enthalpy form with compression work), see `heat_equation`
+- symmetry at r = 0: d/dt(-3T_1 + 4T_2 - T_3) = 0
+- bed-wall interface: k_eff ∂T/∂r|_{r_i} = k_w (T_w - T(r_i)) / (e/2), second-order
+  one-sided difference, imposed algebraically
+- volume-averaged mass balance, Eq. (3), with the trapezoidal cylindrical average of ∂n_a/∂t
+- ideal-gas closure with the harmonic volume-mean temperature (exact for uniform P)
+- wall energy balance, Eq. (8)
 """
-function MDA_adsorption!(out, du, u, p, t)
-    # Unpacking variables
+function MDA_adsorption!(out, du, u, p::AdsorptionParameters, t)
+    iso = p.isotherm
+    mp = p.material
+    gp = p.geometric
+    op = p.operational
+
+    ρₛ, ε_b, M_H2, R, k_eff = mp.ρₛ, mp.ε_b, mp.M_H2, mp.R, mp.k_eff
+    n_r, dr, V, r_span, R_T, e = gp.n_r, gp.dr, gp.V, gp.r_span, gp.R_T, gp.e
+    Ao, Ai, c_wall, m_wall, k_wall = gp.Ao, gp.Ai, gp.c_wall, gp.m_wall, gp.k_wall
+    U, T_air, m_in = op.U, op.T_air, op.m_in
+
+    # Unpack state variables
     T = u[1:n_r]
     nₐ = u[n_r+1:2*n_r]
     ρ_avg = u[2*n_r+1]
     P = u[2*n_r+2]
-    ρ = u[2*n_r+3:end]
+    ρ = u[2*n_r+3:3*n_r+2]
+    T_wall = u[3*n_r+3]
 
-    dH = α .* ((log.(n₀ ./ nₐ)) .^ (1 / m))
+    # Isosteric heat of adsorption
+    dH = isosteric_heat_of_adsorption(iso, P, T)
 
-    # Heat diffusion, implicit form
-    # f(x) = 0 = dT/dt - A*T
-    # A is the discretisation matrix
-    # b should be zero as it is recalculated in 63.
-    out[1:n_r] .= du[1:n_r] .- 1 / (ρₛ * cₛ * (1 - ε_b) + ρ_avg * cₚ * ε_b) * (A * T .+ dH .* du[n_r+1:2*n_r] ./ V .+ du[2*n_r+2])
+    # Energy balance
+    out[1:n_r] .= du[1:n_r] .- heat_equation(mp, gp, op, u, du, dH)
 
-    # Neumann BC time derivative for the tank centre 
+    # Symmetry condition at the axis (time derivative of the one-sided difference)
     out[1] = du[1] - (4 * du[2] - du[3]) / 3
 
-    # Robin BC time derivative to apply method of lines
-    out[n_r] = du[n_r] - (4 * du[n_r-1] - du[n_r-2]) / (3 + 2 * U * dr / k_eff)
+    # Bed-wall interface: flux continuity with the lumped wall (algebraic)
+    out[n_r] = (3 + 4 * k_wall * dr / k_eff / e) * T[n_r] - (4 * T[n_r-1] - T[n_r-2] + 4 * k_wall * dr / k_eff / e * T_wall)
 
-    # Adsorption equation
-    out[n_r+1:2*n_r] .= nₐ .- n₀ .* exp.(-(R .* T ./ (α .+ β .* T)) .^ m .* (log.(p₀ / P)) .^ m)
+    # Adsorption equilibrium at each node
+    out[n_r+1:2*n_r] .= nₐ .- adsorption_isotherm(iso, P, T)
 
-    # Macroscopic mass balance 
-    # mean(n_a .* r_span) / R computes the average adsorption of H2 
-    out[2*n_r+1] = du[2*n_r+1] - (m_in / (V * ε_b) - ρₛ * (1 - ε_b) * M_H2 / ε_b * mean(du[n_r+1:2*n_r] .* r_span) / R_T)
+    # Volume-averaged mass balance, Eq. (3)
+    dna_avg = cyl_avg(du[n_r+1:2*n_r], r_span, R_T)
+    out[2*n_r+1] = du[2*n_r+1] - (m_in / (V * ε_b) - ρₛ * (1 - ε_b) * M_H2 / ε_b * dna_avg)
 
-    # Ideal gas pressure equation
-    # mean(T .* r_span) / R_T computes the pressure inside the tank
-    # out[2*n_r+2] = P - ρ_avg * R .* (mean(T .* r_span) / R_T) / M_H2
-    # out[2*n_r+2] = du[2*n_r+2] - dPdt_fixed
-    out[2*n_r+2] = du[2*n_r+2] - R / M_H2 * (du[2*n_r+1] * (mean(T .* r_span) / R_T) + ρ_avg * (mean(du[1:n_r] .* r_span) / R_T))
+    # Ideal-gas closure with the harmonic volume-mean temperature
+    T_H = 1 / cyl_avg(1 ./ T, r_span, R_T)
+    out[2*n_r+2] = P - ρ_avg * R / M_H2 * T_H
 
-    # Pressure equation used to compute ρ in each node
-    out[2*n_r+3:end] = P .- ρ .* R .* T ./ M_H2
+    # Local gas density
+    out[2*n_r+3:3*n_r+2] .= P .- ρ .* R .* T ./ M_H2
+
+    # Tank wall energy balance, Eq. (8)
+    Q_bed = -k_wall * Ai * (T_wall - T[n_r]) / (e / 2)          # Heat flow from the bed to the wall
+    Q_wall = (e / 2 / k_wall + 1 / U)^(-1) * Ao * (T_wall - T_air) # Heat flow from the wall to the bath
+    out[3*n_r+3] = du[3*n_r+3] - (Q_bed - Q_wall) / (c_wall * m_wall)
 end
 
+"""
+Initial state, initial derivative guess and differential-variable flags for the DAE.
+
+- `Pᵢ`, `T_0`: initial pressure and (uniform) temperature. For a stage restart, pass the
+  final state of the previous stage through the keyword arguments `T_init` (vector),
+  `ρ_avg_init`, `T_wall_init` and `du_init` (final derivative vector); the integrated ρ̄ is then
+  carried over exactly, which keeps the global mass balance closed across stages.
+"""
 function dae_setup(isotermParams::IsothermParameters,
     materialProps::MaterialProperties,
     geometricParams::GeometricParameters,
     operationalParams::OperationalParameters,
     Pᵢ::Float64,
     T_0::Float64,
-    R=8.314)
+    R=8.314;
+    T_init=nothing, ρ_avg_init=nothing, T_wall_init=nothing, du_init=nothing)
 
     # Unpack parameters
-    # Relevant material properties
     M_H2, k_eff, ε_b, ρₛ = materialProps.M_H2, materialProps.k_eff, materialProps.ε_b, materialProps.ρₛ
-
-    # Relevant material parameters
     U, T_air, m_in = operationalParams.U, operationalParams.T_air, operationalParams.m_in
-
-    # Relevant geometric parameters
     n_r, dr, V, R_T, r_span = geometricParams.n_r, geometricParams.dr, geometricParams.V, geometricParams.R_T, geometricParams.r_span
     e = geometricParams.e
     k_wall = geometricParams.k_wall
 
+    # Initial temperature vector
+    Tᵢ = T_init === nothing ? ones(n_r) * T_0 : copy(T_init)
 
-    # Calculate initial temperature vector
-    Tᵢ = ones(n_r) * T_0
-
-    # Calculate initial adsorption vector
+    # Initial adsorption vector
     nₐᵢ = adsorption_isotherm(isotermParams, Pᵢ, Tᵢ)
 
-    # Calculate initial density vector
+    # Initial local density vector
     ρᵢ = ideal_gas_equation(Tᵢ, R, M_H2, P=Pᵢ)
 
+    # Initial volume-averaged density, consistent with P = ρ̄ R_H2 T_H
+    ρ_avgᵢ = ρ_avg_init === nothing ? Pᵢ * M_H2 / R * cyl_avg(1 ./ Tᵢ, r_span, R_T) : ρ_avg_init
+
+    # Initial wall temperature
+    T_wallᵢ = T_wall_init === nothing ? Tᵢ[end] : T_wall_init
+
     # Initial state vector
-    u₀ = vcat(Tᵢ, nₐᵢ, ρᵢ[1], Pᵢ, ρᵢ, Tᵢ[end]) # Last term is tank wall temperature
+    u₀ = vcat(Tᵢ, nₐᵢ, ρ_avgᵢ, Pᵢ, ρᵢ, T_wallᵢ)
 
-    # Update Boundary Conditions
-    # Robin BC for tank exterior
-    u₀[n_r] = (4 * u₀[n_r-1] - u₀[n_r-2] + 4 * k_wall * dr / k_eff / e * T_0) / (3 + 4 * k_wall * dr / k_eff / e)
+    if T_init === nothing
+        # Interface temperature consistent with the algebraic bed-wall condition
+        u₀[n_r] = (4 * u₀[n_r-1] - u₀[n_r-2] + 4 * k_wall * dr / k_eff / e * T_wallᵢ) / (3 + 4 * k_wall * dr / k_eff / e)
+        u₀[2*n_r] = adsorption_isotherm(isotermParams, Pᵢ, u₀[n_r])
+        u₀[3*n_r+2] = ideal_gas_equation(u₀[n_r], R, M_H2, P=Pᵢ)
+    end
 
-    # Update adsorption amount at the last node
-    u₀[2*n_r] = adsorption_isotherm(isotermParams, Pᵢ, T_0)
+    # Initial time derivative guess (IDA computes consistent values). At a stage restart the
+    # final derivative of the previous stage must be supplied (du_init) so that the
+    # consistent-initialisation Newton iteration of IDA starts close to the solution.
+    du₀ = du_init === nothing ? ones(length(u₀)) * 1e-5 : copy(du_init)
+    du_init === nothing && (du₀[n_r] = (4 * du₀[n_r-1] - du₀[n_r-2]) / (3 + 2 * U * dr / k_eff))
+    du₀[2*n_r+1] = m_in / V / ε_b - ρₛ * (1 - ε_b) * M_H2 / ε_b * cyl_avg(du₀[n_r+1:2*n_r], r_span, R_T)
 
-    # Update density at the last node
-    u₀[3*n_r+2] = ideal_gas_equation(u₀[n_r], R, M_H2, P=Pᵢ)
-
-    # Initial time derivative vector
-    du₀ = ones(length(u₀)) * 1e-5
-
-    # Initial time derivative for the last node
-    du₀[n_r] = (4 * du₀[n_r-1] - du₀[n_r-2]) / (3 + 2 * U * dr / k_eff)
-
-    # Initial average density derivative for the last node
-    du₀[2*n_r+1] = m_in / V / ε_b - ρₛ * (1 - ε_b) * M_H2 / ε_b * mean(du₀[n_r+1:2*n_r] .* r_span) / R_T
-
-    # Explicit differential variables
+    # Differential / algebraic flags
     differential_vars = [true for _ in 1:(3*n_r+3)]
-    differential_vars[2*n_r+3:3*n_r+2] .= false
-    differential_vars[n_r] = false # Algebraic equation aproach for T_N
+    differential_vars[n_r] = false                      # bed-wall interface
+    differential_vars[n_r+1:2*n_r] .= false             # adsorption equilibrium
+    differential_vars[2*n_r+2] = false                  # ideal-gas closure
+    differential_vars[2*n_r+3:3*n_r+2] .= false         # local densities
 
     return u₀, du₀, differential_vars
 end

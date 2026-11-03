@@ -8,42 +8,56 @@ using Plots
 include("coefficient_matrix.jl")
 export coefficient_matrix
 
+include("equations_of_state.jl")
+export ideal_gas_equation, cyl_avg
+
 include("adsorption_systems.jl")
 export IsothermParameters, MDAParameters, DAParameters, MaterialProperties, GeometricParameters, OperationalParameters, AdsorptionParameters,
     adsorption_isotherm, isosteric_heat_of_adsorption, MDA_adsorption!, dae_setup
 
-include("equations_of_state.jl")
-export ideal_gas_equation
-
 """
-Function to compute the heat equations for the adsorption system.
+Energy balance of the packed bed (enthalpy form), per unit bed volume:
+
+    (ρ_s(1-ε_b) c_ps + ρ_g ε_b c_pg + n_a ρ_s(1-ε_b) M_H2 c_vg) ∂T/∂t
+        = k_eff/r ∂/∂r(r ∂T/∂r)                 (Q_conductive, discretised as A*T - b)
+        + ρ_s(1-ε_b) ΔH ∂n_a/∂t                 (Q_adsorptive)
+        + max(ṁ,0)/V c_pg (T_H2 - T)            (Q_mass_flow: inflow enthalpy; the outflow
+                                                 leaves at the local bed temperature, so the
+                                                 term vanishes during discharge)
+        + ε_b dP/dt                             (Q_compression: compression/expansion work of
+                                                 the gas phase, uniform because P is uniform)
+
+The compression term is evaluated from the differential variables through the ideal-gas
+closure P = ρ̄ R_H2 T_H, with T_H the harmonic volume mean of T (see `MDA_adsorption!`).
 
 # Inputs:
-- `materialProps`: Material properties struct containing ρₛ, cₛ, ε_b, cₚ
-- `geometricParams`: Geometric parameters struct containing A, V, n_r
-- `u`: State variables vector containing temperature T, average density ρ_avg
-- `du`: Derivative of state variables vector
-- `dH`: Isosteric heat of adsorption vector
+- `materialProps`: Material properties struct containing ρₛ, cₛ, mₛ, ε_b, cₚ, cᵥ, M_H2, R
+- `geometricParams`: Geometric parameters struct containing A, b, V, n_r, r_span, R_T
+- `operationalParams`: Operational parameters (m_in, T_gas)
+- `u`: State variables vector (T, n_a, ρ_avg, P, ρ, T_wall)
+- `du`: Time derivative of the state variables
+- `dH`: Isosteric heat of adsorption vector / J/mol
 
 # Outputs:
 - `dT`: Rate of change of temperature vector
 """
 function heat_equation(materialProps::MaterialProperties, geometricParams::GeometricParameters, operationalParams::OperationalParameters, u, du, dH)
-    # Unpack parameters
     # Material properties
-    ρₛ = materialProps.ρₛ
     cₛ = materialProps.cₛ
     ε_b = materialProps.ε_b
     cₚ = materialProps.cₚ
     cᵥ = materialProps.cᵥ
     mₛ = materialProps.mₛ
     M_H2 = materialProps.M_H2
+    R = materialProps.R
 
     # Geometric parameters
     A = geometricParams.A
+    b = geometricParams.b
     V = geometricParams.V
     n_r = geometricParams.n_r
-    b = geometricParams.b
+    r_span = geometricParams.r_span
+    R_T = geometricParams.R_T
 
     # Operational parameters
     m_in = operationalParams.m_in
@@ -53,27 +67,24 @@ function heat_equation(materialProps::MaterialProperties, geometricParams::Geome
     T = u[1:n_r]
     nₐ = u[n_r+1:2*n_r]
     ρ_avg = u[2*n_r+1]
-    P = u[2*n_r+2]
     ρ = u[2*n_r+3:3*n_r+2]
-    T_wall = u[3*n_r+3] # Tank wall temperature
+    dTdt = du[1:n_r]
+    dρ_avg = du[2*n_r+1]
 
-    # Prueba dividiendo por dV
-    dT_cte_term = 1 .* (mₛ .* cₛ ./ V .+ ρ .* ε_b .* cᵥ .+ nₐ .* mₛ .* M_H2 ./ V .* cᵥ)
+    # Effective volumetric heat capacity (solid + gas at constant pressure + adsorbed phase)
+    dT_cte_term = mₛ .* cₛ ./ V .+ ρ .* ε_b .* cₚ .+ nₐ .* mₛ .* M_H2 ./ V .* cᵥ
 
-    # Q_conductive = 2 .* π .* L .* dr ./ R_T .* A * T # Conductive heat transfer term
-    Q_conductive = A * T .- b # Conductive heat transfer term
-    Q_adsorptive = mₛ / V .* dH .* du[n_r+1:2*n_r] # Adsorptive heat transfer term
-    # Q_mass_flow = m_in .* cₚ .* (T_H2 .- T) # Mass flow heat transfer term
-    Q_mass_flow = m_in / V .* cₚ .* (T_H2 .- T) # Mass flow heat transfer term
-    # avg_Q_mass_flow = mean(Q_mass_flow)
-    #println("Q_mass_flow: $(avg_Q_mass_flow) W/m³")
-    #println("Q_conductive: $(mean(Q_conductive)) W/m³")
-    #println("Q_adsorptive: $(mean(Q_adsorptive)) W/m³") 
+    Q_conductive = A * T .- b                          # Radial conduction
+    Q_adsorptive = mₛ / V .* dH .* du[n_r+1:2*n_r]     # Heat of adsorption
+    Q_mass_flow = max(m_in, 0.0) / V .* cₚ .* (T_H2 .- T) # Inlet enthalpy (charging only)
 
-    dT = 1 ./ (dT_cte_term) .* (1 * Q_conductive .+ 1 * Q_adsorptive .+ 1 * Q_mass_flow)
+    # Compression work ε_b dP/dt, with P = ρ̄ R_H2 T_H and T_H = 1/<1/T>
+    T_H = 1 / cyl_avg(1 ./ T, r_span, R_T)
+    dT_H = T_H^2 * cyl_avg(dTdt ./ T .^ 2, r_span, R_T)
+    dPdt = R / M_H2 * (dρ_avg * T_H + ρ_avg * dT_H)
+    Q_compression = ε_b * dPdt
 
-    #println("Denominador: $dT_cte_term")
-    #println("Numerador: $(A * T + mₛ .* dH .* du[n_r+1:2*n_r] .+ m_in .* cₚ .* (T_H2 .- T))")
+    dT = (Q_conductive .+ Q_adsorptive .+ Q_mass_flow .+ Q_compression) ./ dT_cte_term
 
     return dT
 end
@@ -101,41 +112,21 @@ function generate_profiles_plot(t, r_span, T_profile, Adsorption_profile, P_prof
     idx = [] # Empty array to store the indexes of the time steps
 
     for i in range(0, stop=t[end], step=time_step)
-        # This loop is used to find the indexes of the time steps nearest to 
-        # t = 100s, 200s, 300s, etc.
-        # serachsortednearest is used to find the index of the nearest value
-        # push! is used to append the index to the idx array
         push!(idx, searchsortednearest(t, i))
     end
 
     unique!(idx) # Remove duplicates
 
     for i in range(1, stop=length(idx), step=1)
-        # This loop is used to plot the temperature, adsorption, and gas density
-        # property[idx[i]] is used to access the values of the properties at 
-        # t = 100s, 200s, 300s, etc.
-        # t[idx[i]] the time at the specific index
-
-        # Temperature plot
         plot!(plt[1], r_span, T_profile[idx[i], :], xlabel="Radius (m)", ylabel="Temperature (K)", label="t = $(round(t[idx[i]], digits=2)) s", legend=:outerbottomright)
-
-        # Adsorption plot
         plot!(plt[2], r_span, Adsorption_profile[idx[i], :], xlabel="Radius (m)", ylabel="q_a / mol/kg_ads", label="t = $(round(t[idx[i]], digits=2)) s", legend=false)
-
-        # Gas density plot
         plot!(plt[4], r_span, Density_profile[idx[i], :], xlabel="Radius (m)", ylabel="Gas density (kg/m³)", label="t = $(round(t[idx[i]], digits=2)) s", legend=false)
     end
 
-    # Pressure plot
     plot!(plt[3], t, P_profile .* 1e-6, xlabel="Time (s)", ylabel="Pressure (MPa)", label="Pressure vs Time", legend=false, color=:black)
-
-    # Plot size for better visualization
     plot!(size=(1600, 760))
     plot!(margin=Plots.cm)
-
-    # Display the plot
     display(plt)
-    # savefig(plt, "1D_cylindrical/figs/1D_cylindrical_model_$(time_step)s.svg")
 end
 
 end

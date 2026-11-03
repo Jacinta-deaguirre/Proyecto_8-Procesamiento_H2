@@ -1,25 +1,24 @@
-using Revise
+ENV["GKSwstype"] = "100" # headless plotting
 using HydrogenAdsorption
 using Sundials
 using Statistics
 using Plots
 using CSV
 using DataFrames
-using BenchmarkTools
 VERBOSE = false # Set to true to print more information during the simulation
 
 # parameters
 # Tank parameters
-V = 2.4946e-3 # Volume of tank / m³
-L = 0.4 # Length of the tank / m
+V = 2.4946e-3 # Bed volume / m³ (measured, Richard et al. 2009)
+R_T = 0.0469 # Bed radius / m (physical internal radius, Xiao et al. 2012)
+L = V / (pi * R_T^2) # Equivalent cylindrical length of the bed / m (= 0.361 m; the internal height of 0.45 m includes the non-cylindrical ends)
 e = 0.0508 - 0.0469 # Wall thickness / m
 c_wall = 468 # Specific heat capacity of the tank wall / J/kg K
 m_wall = 3.714 # Mass of the tank wall / kg
 k_wall = 13 # Thermal conductivity of the tank wall / W/m K
 
 # Inputs needed for the coefficient_matrix function
-R_T = sqrt(V / (pi * L)) # Radius of the tank / m
-dr = (1 / 2)^2 * 0.0025 # Radial step size / m
+dr = (1 / 2)^5 * 0.0025 # Radial step size / m
 U = 36 * 1 # Heat transfer coefficient / W/(m²·K)
 
 # Tank surface areas
@@ -57,9 +56,10 @@ DA_params = DAParameters(P_lim, ψ, β, κ, γ, m)
 # Activated carbon properties
 ρₛ = 517.6 # Density of activated carbon / kg/m³
 cₛ = 825 # Specific heat capacity of carbon / J/kg K
-mₛ = 0.671 # Mass of activated carbon / kg
+# mₛ (mass of activated carbon) is set below as ρₛ (1 - ε_b) V, consistent with Eqs. (2)-(3)
 kₛ = 0.646 # Thermal conductivity of activated carbon / W/m K
 ε_b = 0.49 # Bed porosity
+mₛ = ρₛ * (1 - ε_b) * V # Mass of activated carbon implied by the bed / kg
 
 # Hydrogen properties
 cₚ = 14700.0 # Specific heat capacity of hydrogen / J/kg K
@@ -70,6 +70,8 @@ k_g = 0.206 # Thermal conductivity of hydrogen / W/m K
 
 k_eff = (kₛ * (1 - ε_b) + k_g * ε_b) # Effective thermal conductivity / W/(m·K)
 n_r, r_span, A, b = coefficient_matrix(R_T, dr, k_eff, U, T_air)
+r_span = collect(r_span)
+dr = r_span[2] - r_span[1] # Actual grid spacing (grid covers R_T exactly)
 material_props = MaterialProperties(ρₛ, cₛ, mₛ, kₛ, ε_b, cₚ, cᵥ, M_H2, R, k_g, k_eff)
 
 # Geometric parameters
@@ -93,92 +95,15 @@ u₀, du₀, differential_vars = dae_setup(MDA_params, material_props, geometric
 
 println("dr: $dr", ", n_r: $n_r")
 
-function adsorption!(out, du, u, p, t)
-    # Unpack parameters
-    # Structs
-    MDA_params = p.isotherm
-    material_props = p.material
-    geometric_params = p.geometric
-    operational_params = p.operational
-
-    # Scalars from structs
-    # Material properties
-    ρₛ = material_props.ρₛ
-    ε_b = material_props.ε_b
-    M_H2 = material_props.M_H2
-    R = material_props.R
-    k_eff = material_props.k_eff
-
-    # Geometric parameters
-    n_r = geometric_params.n_r
-    dr = geometric_params.dr
-    V = geometric_params.V
-    r_span = geometric_params.r_span
-    R_T = geometric_params.R_T
-    e = geometric_params.e
-    Ao = geometric_params.Ao
-    Ai = geometric_params.Ai
-    c_wall = geometric_params.c_wall
-    m_wall = geometric_params.m_wall
-    k_wall = geometric_params.k_wall
-
-    # Operational parameters
-    U = operational_params.U
-    m_in = operational_params.m_in
-
-    # Unpack state variables
-    T = u[1:n_r]
-    nₐ = u[n_r+1:2*n_r]
-    ρ_avg = u[2*n_r+1]
-    P = u[2*n_r+2]
-    ρ = u[2*n_r+3:3*n_r+2]
-    T_wall = u[3*n_r+3] # Tank wall temperature
-
-    # Isosteric heat of adsorption
-    dH = isosteric_heat_of_adsorption(MDA_params, P, T)
-    #dH = isosteric_heat_of_adsorption(P, du[2*n_r+2], T, du[1:n_r], R)
-
-    # Heat equation
-    out[1:n_r] .= du[1:n_r] .- heat_equation(material_props, geometric_params, operational_params, u, du, dH)
-
-    # Neumann BC time derivative for the tank centre 
-    out[1] = du[1] - (4 * du[2] - du[3]) / 3
-
-    # Robin BC time derivative to apply method of lines
-    #out[n_r] = du[n_r] - (4 * du[n_r-1] - du[n_r-2]) / (3 + 4 * k_wall * dr / k_eff / e)
-    out[n_r] = (3 + 4 * k_wall * dr / k_eff / e) * T[n_r] - (4 * T[n_r-1] - T[n_r-2] + 4 * k_wall * dr / k_eff / e * T_wall) # DAE Approach
-
-    # Adsorption isotherm
-    out[n_r+1:2*n_r] .= nₐ .- adsorption_isotherm(MDA_params, P, T)
-
-    # Macroscopic mass balance
-    # mean(n_a .* r_span) / R computes the average adsorption of H2 
-    dna_avg = sum((du[n_r+2:2*n_r] .* r_span[2:end] + du[n_r+1:2*n_r-1] .* r_span[1:end-1]) / 2 * (2 / R_T^2) * dr)
-    # dna_avg_simple = mean(du[n_r+1:2*n_r])
-    # println("dna_avg: $dna_avg, dna_avg_simple: $dna_avg_simple")
-    out[2*n_r+1] = du[2*n_r+1] - (m_in / (V * ε_b) - ρₛ * (1 - ε_b) * M_H2 / ε_b * dna_avg)
-    #out[2*n_r+1] = du[2*n_r+1] - (m_in / (V * ε_b) - ρₛ  * M_H2 / ε_b * dna_avg)
-
-    # Ideal gas equation
-    out[2*n_r+2] = du[2*n_r+2] - ideal_gas_equation(T, du[1:n_r], R, M_H2, R_T, r_span, ρ_avg, du[2*n_r+1])
-
-    # Density of the gas
-    out[2*n_r+3:3*n_r+2] = P .- ideal_gas_equation(T, R, M_H2, ρ=ρ)
-
-
-    # Tank wall energy balance
-    Q_bed = -k_wall * Ai * (T_wall - T[n_r]) / (e / 2) # Heat flow from the bed to the wall
-    Q_wall = (e / 2 / k_wall + 1 / U)^(-1) * Ao * (T_wall - T_air) # Heat flow from the wall to the ambient
-    out[3*n_r+3] = du[3*n_r+3] - (Q_bed - Q_wall) / (c_wall * m_wall)
-end
+# The DAE residual is the package function `MDA_adsorption!` (src/adsorption_systems.jl):
+# single definition of the model shared by all scripts.
 
 t₀ = 0.0 # Initial time // s
 t_f = 1042 # Final time // s
 tspan = (t₀, t_f) # Time span for the simulation
 
 # Create the DAE problem
-prob = DAEProblem(adsorption!, du₀, u₀, tspan, p=par, differential_vars=differential_vars);
-prob = remake(prob, p=par);
+prob = DAEProblem(MDA_adsorption!, du₀, u₀, tspan, par, differential_vars=differential_vars);
 #@btime sol = solve(prob, IDA(linear_solver=:LapackDense), progress=true) # 838.288 s for dr = 0.000025
 sol = solve(prob, IDA(linear_solver=:LapackDense), progress=true)
 # Extract the solution
@@ -192,7 +117,6 @@ P = [sol.u[i][2*n_r+2] for i in 1:length(sol.u)]
 
 ### Plotting ###
 plot_palette = palette(:viridis, 13, rev=true)
-r_span = range(0, stop=R_T, length=n_r) # Generates radial nodes // m
 #generate_profiles_plot(t, r_span, T, nₐ, P, ρ, 200, :tab20b) # Generates the profiles plot for time_step = 200s
 #generate_profiles_plot(t, r_span, T, nₐ, P, ρ, 100, :tab20b) # Generates the profiles plot for time_step = 100s
 generate_profiles_plot(t, r_span, T, nₐ, P, ρ, 50, plot_palette) # Generates the profiles plot for time_step = 50s
@@ -206,12 +130,12 @@ T_middle = [T[i][middle_index] for i in eachindex(T)] # Temperature at the middl
 
 # Reconstruct final free and adsorber hydrogen mass
 #  in the tank 
-T_avg = [mean(T[i]) for i in eachindex(T)]
-n_avg = [mean(nₐ[i]) for i in eachindex(nₐ)]
+T_avg = [cyl_avg(T[i], r_span, R_T) for i in eachindex(T)] # Volume average
+n_avg = [cyl_avg(nₐ[i], r_span, R_T) for i in eachindex(nₐ)] # Volume average, Eq. (2)
 ρ_avg_nodes = [mean(ρ[i]) for i in eachindex(ρ)]
 
 m_H2_gas = ρ_avg .* V * ε_b # Mass of hydrogen in the gas phase / kg
-m_H2_ads = n_avg .* mₛ * M_H2 # Mass of hydrogen in the adsorbed phase / kg
+m_H2_ads = n_avg .* mₛ * M_H2 # Mass of hydrogen in the adsorbed phase / kg (mₛ = ρₛ (1 - ε_b) V)
 m_H2_total = m_H2_gas .+ m_H2_ads # Total mass of hydrogen in the tank / kg 
 mass_df = DataFrame(Time_s=t, Gas_Mass_kg=m_H2_gas, Adsorbed_Mass_kg=m_H2_ads, Total_Mass_kg=m_H2_total)
 CSV.write("outputs/charge_mass_profiles.csv", mass_df)
@@ -415,6 +339,8 @@ df_timeseries = DataFrame(
     Wall_Temperature_K=T_wall  # <-- T_wall AÑADIDO AQUÍ
 )
 CSV.write("outputs/charge_timeseries_data.csv", df_timeseries)
+# Final state and derivative, used to restart the next stage with consistent initial conditions
+CSV.write("outputs/charge_final_state.csv", DataFrame(u=sol.u[end], du=sol.du[end]))
 
 println("Resultados exportados exitosamente.")
 
