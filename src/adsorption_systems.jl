@@ -90,8 +90,9 @@ struct OperationalParameters
     T_air::Float64  # Temperature of the external fluid (water bath) / K
     m_in            # Mass flow rate of hydrogen into the tank (negative for discharge) / kg/s
     T_gas::Float64  # Temperature of the incoming hydrogen gas / K
+    k::Float64      #LDF mass transfer coefficient / 1/s
 end
-
+OperationalParameters(U, T_air, m_in, T_gas) = OperationalParameters(U, T_air, m_in, T_gas, Inf) #original script keeps working and runs the base model (k=inf)
 struct AdsorptionParameters
     isotherm::IsothermParameters
     material::MaterialProperties
@@ -192,6 +193,16 @@ function isosteric_heat_of_adsorption(params::MDAParameters, P, T)
     return dH
 end
 
+function isosteric_heat_of_adsorption(params::MDAParameters, nₐ)
+  n₀ = params.n₀  
+  α = params.α
+  m = params.m
+
+  # Calculate the isosteric heat of adsorption with the actual n_a
+  dH = α .* ((log.(n₀ ./ clamp.(nₐ,1e-12, 0.999*n₀))) .^(1/m))
+  return dH
+end
+
 """
 DAE residual of the 1-D radial model (method of lines), `out = F(du, u, p, t)`, with
 `p::AdsorptionParameters`. This is the single definition of the model used by every script.
@@ -224,7 +235,7 @@ function MDA_adsorption!(out, du, u, p::AdsorptionParameters, t)
     ρₛ, ε_b, M_H2, R, k_eff = mp.ρₛ, mp.ε_b, mp.M_H2, mp.R, mp.k_eff
     n_r, dr, V, r_span, R_T, e = gp.n_r, gp.dr, gp.V, gp.r_span, gp.R_T, gp.e
     Ao, Ai, c_wall, m_wall, k_wall = gp.Ao, gp.Ai, gp.c_wall, gp.m_wall, gp.k_wall
-    U, T_air, m_in = op.U, op.T_air, op.m_in
+    U, T_air, m_in, k = op.U, op.T_air, op.m_in, op.k
 
     # Unpack state variables
     T = u[1:n_r]
@@ -235,7 +246,7 @@ function MDA_adsorption!(out, du, u, p::AdsorptionParameters, t)
     T_wall = u[3*n_r+3]
 
     # Isosteric heat of adsorption
-    dH = isosteric_heat_of_adsorption(iso, P, T)
+    dH = isinf(k) ? isosteric_heat_of_adsorption(iso, P, T) : isosteric_heat_of_adsorption(iso, nₐ)
 
     # Energy balance
     out[1:n_r] .= du[1:n_r] .- heat_equation(mp, gp, op, u, du, dH)
@@ -246,9 +257,13 @@ function MDA_adsorption!(out, du, u, p::AdsorptionParameters, t)
     # Bed-wall interface: flux continuity with the lumped wall (algebraic)
     out[n_r] = (3 + 4 * k_wall * dr / k_eff / e) * T[n_r] - (4 * T[n_r-1] - T[n_r-2] + 4 * k_wall * dr / k_eff / e * T_wall)
 
-    # Adsorption equilibrium at each node
-    out[n_r+1:2*n_r] .= nₐ .- adsorption_isotherm(iso, P, T)
-
+    # Adsorption at each node
+    if isinf(k)
+        out[n_r+1:2*n_r] .= nₐ .- adsorption_isotherm(iso, P, T) #base model: instantaneous equilibrium
+    else
+        out[n_r+1:2*n_r] .= du[n_r+1:2*n_r] .- k .* (adsorption_isotherm(iso, P, T) .- nₐ) #LDF model
+    end
+    
     # Volume-averaged mass balance, Eq. (3)
     dna_avg = cyl_avg(du[n_r+1:2*n_r], r_span, R_T)
     out[2*n_r+1] = du[2*n_r+1] - (m_in / (V * ε_b) - ρₛ * (1 - ε_b) * M_H2 / ε_b * dna_avg)
@@ -281,11 +296,11 @@ function dae_setup(isotermParams::IsothermParameters,
     Pᵢ::Float64,
     T_0::Float64,
     R=8.314;
-    T_init=nothing, ρ_avg_init=nothing, T_wall_init=nothing, du_init=nothing)
+    T_init=nothing, ρ_avg_init=nothing, T_wall_init=nothing, du_init=nothing, nₐ_init=nothing)
 
     # Unpack parameters
     M_H2, k_eff, ε_b, ρₛ = materialProps.M_H2, materialProps.k_eff, materialProps.ε_b, materialProps.ρₛ
-    U, T_air, m_in = operationalParams.U, operationalParams.T_air, operationalParams.m_in
+    U, T_air, m_in, k = operationalParams.U, operationalParams.T_air, operationalParams.m_in, operationalParams.k
     n_r, dr, V, R_T, r_span = geometricParams.n_r, geometricParams.dr, geometricParams.V, geometricParams.R_T, geometricParams.r_span
     e = geometricParams.e
     k_wall = geometricParams.k_wall
@@ -294,7 +309,7 @@ function dae_setup(isotermParams::IsothermParameters,
     Tᵢ = T_init === nothing ? ones(n_r) * T_0 : copy(T_init)
 
     # Initial adsorption vector
-    nₐᵢ = adsorption_isotherm(isotermParams, Pᵢ, Tᵢ)
+    nₐᵢ = nₐ_init === nothing ? adsorption_isotherm(isotermParams, Pᵢ, Tᵢ) : copy(nₐ_init)
 
     # Initial local density vector
     ρᵢ = ideal_gas_equation(Tᵢ, R, M_H2, P=Pᵢ)
@@ -320,12 +335,15 @@ function dae_setup(isotermParams::IsothermParameters,
     # consistent-initialisation Newton iteration of IDA starts close to the solution.
     du₀ = du_init === nothing ? ones(length(u₀)) * 1e-5 : copy(du_init)
     du_init === nothing && (du₀[n_r] = (4 * du₀[n_r-1] - du₀[n_r-2]) / (3 + 2 * U * dr / k_eff))
+    if du_init === nothing && !isinf(k)
+        du₀[n_r+1:2*n_r] .= 0.0
+    end
     du₀[2*n_r+1] = m_in / V / ε_b - ρₛ * (1 - ε_b) * M_H2 / ε_b * cyl_avg(du₀[n_r+1:2*n_r], r_span, R_T)
 
     # Differential / algebraic flags
     differential_vars = [true for _ in 1:(3*n_r+3)]
     differential_vars[n_r] = false                      # bed-wall interface
-    differential_vars[n_r+1:2*n_r] .= false             # adsorption equilibrium
+    differential_vars[n_r+1:2*n_r] .= !isinf(k)         # adsorption equilibrium
     differential_vars[2*n_r+2] = false                  # ideal-gas closure
     differential_vars[2*n_r+3:3*n_r+2] .= false         # local densities
 
