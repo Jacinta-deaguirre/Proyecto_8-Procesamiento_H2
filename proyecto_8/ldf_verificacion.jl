@@ -5,7 +5,7 @@
 # k = 300 1/s : debe dar muy similar al modelo base
 # k = 3 1/s : LDF de un pellet de 2mm.
 
-ENV["GKSwstype"] = "100" # headless plotting
+ENV["GKSwstype"] = "100" # guardar graficos
 using HydrogenAdsorption
 using Sundials
 using Statistics
@@ -25,8 +25,8 @@ m_wall = 3.714 # Mass of the tank wall / kg
 k_wall = 13 # Thermal conductivity of the tank wall / W/m K
 
 # Inputs needed for the coefficient_matrix function
-dr = (1 / 2)^2 * 0.0025 # Radial step size / m
-U = 36 * 1 # Heat transfer coefficient / W/(m²·K)
+dr = (1 / 2)^2 * 0.0025 # nodos
+U = 36 * 1 # Heat transfer coefficient (h) / W/(m²·K)
 
 # Tank surface areas
 Ai = 2 * pi * R_T * L # Inner surface area of the tank / m²
@@ -138,7 +138,7 @@ end
 tabla.dif_t_centro_K = tabla.T_centro_K .- tabla.T_centro_K[1]
 tabla.dif_P_pct = 100 .* (tabla.P_MPa .- tabla.P_MPa[1]) ./ tabla.P_MPa[1]
 
-show(tabla, allcols=true)
+show(tabla, alrows=true, allcols=true)
 println()
 mkpath(joinpath(@__DIR__, "outputs"))
 CSV.write(joinpath(@__DIR__, "outputs", "ldf_verificacion.csv"), tabla)

@@ -132,7 +132,7 @@ for k in k_conv
             dif_m_ads_pct = 100*(m_ads_c - m_ads_ref) / m_ads_ref))
     end
 end
-show(tabla_tiempo, allcols=true)
+show(tabla_tiempo, allrows=true, allcols=true)
 println()
 mkpath(joinpath(@__DIR__, "outputs"))
 CSV.write(joinpath(@__DIR__, "outputs", "ldf_convergencia_tiempo.csv"),tabla_tiempo)

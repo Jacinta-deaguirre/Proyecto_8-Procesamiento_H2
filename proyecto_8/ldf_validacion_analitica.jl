@@ -12,7 +12,7 @@ n_r = prm.n_r
 T₀ = 281.0
 P₀ = 9.0e6
 
-#Poco carbón: lo que se absorbe no cambia P ni libera calor apreciable
+#Poco carbón: lo que se adsorbe no cambia P ni libera calor apreciable
 f_ads = 1e-8
 mat = prm.material
 mat_chico = MaterialProperties(mat.ρₛ * f_ads, mat.cₛ, mat.mₛ * f_ads, mat.kₛ, mat.ε_b, mat.cₚ, mat.cᵥ,
