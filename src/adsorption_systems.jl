@@ -91,8 +91,11 @@ struct OperationalParameters
     m_in            # Mass flow rate of hydrogen into the tank (negative for discharge) / kg/s
     T_gas::Float64  # Temperature of the incoming hydrogen gas / K
     k::Float64      #LDF mass transfer coefficient / 1/s
+    E_a::Float64 #energía de activacion de k(T) / J/mol
+    T_ref::Float64 #temperatura de referencia de k(T) / K
 end
-OperationalParameters(U, T_air, m_in, T_gas) = OperationalParameters(U, T_air, m_in, T_gas, Inf) #original script keeps working and runs the base model (k=inf)
+OperationalParameters(U, T_air, m_in, T_gas) = OperationalParameters(U, T_air, m_in, T_gas, Inf, 0.0, 281.0) #original script keeps working and runs the base model (k=inf)
+OperationalParameters(U, T_air, m_in, T_gas, k) = OperationalParameters(U, T_air, m_in, T_gas, k, 0.0, 281.0)
 struct AdsorptionParameters
     isotherm::IsothermParameters
     material::MaterialProperties
@@ -236,6 +239,7 @@ function MDA_adsorption!(out, du, u, p::AdsorptionParameters, t)
     n_r, dr, V, r_span, R_T, e = gp.n_r, gp.dr, gp.V, gp.r_span, gp.R_T, gp.e
     Ao, Ai, c_wall, m_wall, k_wall = gp.Ao, gp.Ai, gp.c_wall, gp.m_wall, gp.k_wall
     U, T_air, m_in, k = op.U, op.T_air, op.m_in, op.k
+    E_a, T_ref = op.E_a, op.T_ref
 
     # Unpack state variables
     T = u[1:n_r]
@@ -261,7 +265,8 @@ function MDA_adsorption!(out, du, u, p::AdsorptionParameters, t)
     if isinf(k)
         out[n_r+1:2*n_r] .= nₐ .- adsorption_isotherm(iso, P, T) #base model: instantaneous equilibrium
     else
-        out[n_r+1:2*n_r] .= du[n_r+1:2*n_r] .- k .* (adsorption_isotherm(iso, P, T) .- nₐ) #LDF model
+        k_T = k .* exp.(-(E_a / R) .* (1 ./T .- 1/T_ref)) # K(T) en cada nodo
+        out[n_r+1:2*n_r] .= du[n_r+1:2*n_r] .- k_T .* (adsorption_isotherm(iso, P, T) .- nₐ) #LDF model
     end
     
     # Volume-averaged mass balance, Eq. (3)
