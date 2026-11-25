@@ -25,6 +25,6 @@ scatter!(fig, diseno.t_carga_s ./ 60, diseno.d_max_mm, color=:black, marker=:cir
 
 annotate!(fig, 9.5, 4.5, text("Pellets bajo la curva: el equilibrio sirve", 8, :left, :black))
 
-savefig(fig, joinpath(joinpath(@__DIR__, "resultados_F4"), "ldf_curva_disenoo.svg"))
+savefig(fig, joinpath(joinpath(@__DIR__, "resultados_F4"), "ldf_curva_diseno.svg"))
 savefig(fig, joinpath(joinpath(@__DIR__, "resultados_F4"), "ldf_curva_diseno.png"))
 display(fig)
