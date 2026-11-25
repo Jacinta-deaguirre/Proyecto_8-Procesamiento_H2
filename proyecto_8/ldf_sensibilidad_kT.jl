@@ -38,15 +38,35 @@ function h2_hasta_presion(sol, m_in, P_lim)
     return t_lim, m_in*t_lim
 end
 
-#Verificación con E_a=0 se deben tener los mismos resultados de resultados_F4
-ref = CSV.read(joinpath(@__DIR__, "resultados_F4", "ldf_sensibilidad_carga.csv"), DataFrame)
-for (k, t_c) in [(0.03, 540.0), (4.8e-3, 180.0)]
-    sol_eq, _=correr_carga(Inf, t_c)
-    P_lim = sol_eq.u[end][2*n_r+2]
-    sol, m_in = correr_carga(k, t_c; E_a=.0)
-    t_lim, _=h2_hasta_presion(sol, m_in, P_lim)
-    fila = ref[(ref.t_carga_s .==t_c) .& (ref.k_1_s .== k), :]
-    println("k=$k, t = $t_c s")
-    println(" P_lim: ahora", P_lim/1e6, "MPa | antes", fila.P_lim_MPa[1])
-    println(" H2 cargado ahora:", 100*t_lim/t_c, " %| antes", fila.H2_cargado_pct[1])
+# Ciclo con k(T), para cada tiempo de llenado se corre el equilibrio y E_a = 0 es k constante
+t_cargas = [540.0, 180.0] # 9 y 3 minutos
+k_valores = [0.03, 4.8e-3] #pellets de 2 y 5cm
+E_a_valores = [0.0, 1200.0, 10000.0] #J/mol
+tabla = DataFrame()
+
+for t_c in t_cargas
+    sol_eq, m_eq = correr_carga(Inf, t_c)
+    P_lim_c = sol_eq.u[end][2*n_r+2]
+    T_max_eq = maximum(u[1] for u in sol_eq.u)
+    for k in k_valores, E_a in E_a_valores
+        sol_c, m_c = correr_carga(k, t_c; E_a=E_a)
+        t_lim_c, m_carg_c = h2_hasta_presion(sol_c, m_c, P_lim_c)
+        T_max = maximum(u[1] for u in sol_c.u)
+        f_max= exp(-(E_a/prm.R)*(1/T_max - 1/prm.T₀))
+        push!(tabla, (t_carga_s= t_c, k_1_s = k, E_a_kJ_mol= E_a/1000, N = k*t_c,
+            P_lim_MPa = P_lim_c / 1e6,
+            P_fin_MPa = sol_c.u[end][2*n_r+2]/1e6,
+            t_lim_s = t_lim_c,
+            H2_cargado_g = m_carg_c * 1000,
+            H2_cargado_pct = 100*t_lim_c/t_c,
+            T_max_eq_K = T_max_eq,
+            T_max_K = T_max,
+            dT_max_K = T_max - T_max_eq,
+            kTmax_sobre_k = f_max))
+        println("t = $t_c s, k = $k, E_a = $(E_a/1000) kJ/mol: H2 = ", round(100*t_lim_c/t_c, digits=2), " %")
+    end
 end
+
+show(tabla, allrows=true, allcols=true)
+println()
+CSV.write(joinpath(@__DIR__, "resultados_F4", "ldf_sensibilidad_kT.csv"), tabla)
