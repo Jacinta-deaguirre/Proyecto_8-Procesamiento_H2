@@ -1,18 +1,21 @@
-# ldf_verification.jl - Proyecto 8
-# Que hace: simula la etapa de carga del test 13 con los mismos
-#parámetros de finite_model_xiao.jl pero para tres valores de k.
+# ldf_verification.jl - Proyecto 8 (IIQ3843, modelo LDF)
+# Que hace: simula la carga del Test 13 con los mismos parámetros de finite_model_xiao.jl
+# Con tres valores del coeficiente LDF k:
 # k = inf : debe dar el modelo base
 # k = 300 1/s : debe dar muy similar al modelo base
 # k = 3 1/s : LDF de un pellet de 2mm.
+# Además revisa el balance de masa (criterio error < 1%)
+# Como correr: en PowerShell poner julia --project=. proyecto_8/ldf_verificacion.jl
+#Salidas: en proyecto_8/verificacion_F3/ -> ldf_verificacion.csv y ldf_verificacion.svg
 
-ENV["GKSwstype"] = "100" # guardar graficos
+ENV["GKSwstype"] = "100" # guarda los graficos sin abrir ventanas
 using HydrogenAdsorption
 using Sundials
-using Statistics
 using Plots
 using CSV
 using DataFrames
-using Printf
+
+carpeta = joinpath(@__DIR__, "verificacion_F3")
 
 # parameters
 # Tank parameters
@@ -25,7 +28,7 @@ m_wall = 3.714 # Mass of the tank wall / kg
 k_wall = 13 # Thermal conductivity of the tank wall / W/m K
 
 # Inputs needed for the coefficient_matrix function
-dr = (1 / 2)^2 * 0.0025 # nodos
+dr = (1 / 2)^2 * 0.0025 # Paso radial /m
 U = 36 * 1 # Heat transfer coefficient (h) / W/(m²·K)
 
 # Tank surface areas
@@ -83,7 +86,7 @@ Pᵢ = 0.033e6 # Initial pressure / Pa
 t_f = 1042.0 # Final time // s
 
 function correr_carga(k; reltol=1e-3, abstol=1e-6)
-    #fija la operación con 5 valores
+    #Operación: U, T_air, caudal, T del H2 entrante y k (5 agrumentos)
     op = OperationalParameters(U, T_air, m_in, T_H2, k) 
     #Ficha del sistema con isoterma, material, geometría y operacion
     par = AdsorptionParameters(MDA_params, material_props, geometric_params, op) 
@@ -138,13 +141,13 @@ end
 tabla.dif_t_centro_K = tabla.T_centro_K .- tabla.T_centro_K[1]
 tabla.dif_P_pct = 100 .* (tabla.P_MPa .- tabla.P_MPa[1]) ./ tabla.P_MPa[1]
 
-show(tabla, alrows=true, allcols=true)
+show(tabla, allrows=true, allcols=true)
 println()
-mkpath(joinpath(@__DIR__, "outputs"))
-CSV.write(joinpath(@__DIR__, "outputs", "ldf_verificacion.csv"), tabla)
+mkpath(carpeta)
+CSV.write(joinpath(carpeta, "ldf_verificacion.csv"), tabla)
 
 estilos = Dict(Inf => :solid, 300.0 => :dash, 3.0 => :dot)
-p1 = plot(xlabel="Tiempo / s", ylabel="Presión / Mpa", legend=:bottomright)
+p1 = plot(xlabel="Tiempo / s", ylabel="Presión / MPa", legend=:bottomright)
 p2 = plot(xlabel="Tiempo / s", ylabel="T centro / K", legend=false)
 p3 = plot(xlabel="Tiempo / s", ylabel="Masa adsorbida / g", legend=false)
 
@@ -158,5 +161,5 @@ for k in k_valores
 end
 
 fig = plot(p1, p2, p3, layout=(1, 3), size=(1500, 450), margin=5Plots.mm)
-savefig(fig, joinpath(@__DIR__, "outputs", "ldf_verificacion.svg"))
+savefig(fig, joinpath(carpeta, "ldf_verificacion.svg"))
 display(fig)

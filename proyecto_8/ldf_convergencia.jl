@@ -1,14 +1,16 @@
-# ldf_convergencia.jl - Proyecto 8
-# Que hace: estudio de convergencia del modelo LDF en la carga del Test 13
+# ldf_convergencia.jl - Proyecto 8 (IIQ3843, modelo LDF)
+# Que hace: convergencia del paso de tiempo del modelo LDF en la carga del Test 13
+# Para k = 3 y 0,03 1/s compara 5 tolerancias del solver con una referencia muy fina
+# Como correr: en PowerShell poner julia --project=. proyecto_8/ldf_convergencia.jl
+#Salida: en proyecto_8/verificacion_F3/ldf_convergencia_tiempo.csv 
 
-ENV["GKSwstype"] = "100" # headless plotting
 using HydrogenAdsorption
 using Sundials
 using Statistics
-using Plots
 using CSV
 using DataFrames
-using Printf
+
+carpeta = joinpath(@__DIR__, "verificacion_F3")
 
 # parameters
 # Tank parameters
@@ -79,7 +81,7 @@ Pᵢ = 0.033e6 # Initial pressure / Pa
 t_f = 1042.0 # Final time // s
 
 function correr_carga(k; reltol=1e-3, abstol=1e-6)
-    #fija la operación con 5 valores
+    #Operacion: U, T_air, caudal, T del H2 entrante y k (5 argumentos)
     op = OperationalParameters(U, T_air, m_in, T_H2, k) 
     #Ficha del sistema con isoterma, material, geometría y operacion
     par = AdsorptionParameters(MDA_params, material_props, geometric_params, op) 
@@ -134,5 +136,5 @@ for k in k_conv
 end
 show(tabla_tiempo, allrows=true, allcols=true)
 println()
-mkpath(joinpath(@__DIR__, "outputs"))
-CSV.write(joinpath(@__DIR__, "outputs", "ldf_convergencia_tiempo.csv"),tabla_tiempo)
+mkpath(carpeta)
+CSV.write(joinpath(carpeta, "ldf_convergencia_tiempo.csv"),tabla_tiempo)

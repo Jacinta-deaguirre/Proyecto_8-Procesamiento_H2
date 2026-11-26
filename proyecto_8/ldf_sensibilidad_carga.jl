@@ -1,11 +1,13 @@
-# ldf_sensibilidad_carga.jl - Proyecto 8
-# Sensibilidad del llenado al coeficiente LDF k y al tiempo de llenado t_carga.
-# Mismo estanque y masa que el Test 13, varia el tiempo de llenado con 1042s (Test 13), 540s (mencionado CR1), 300s y 180s.
-# Para cada caso se ve el H2 cargado hasta la presion limite (la del equilibrio).
+# ldf_sensibilidad_carga.jl - Proyecto 8 (IIQ3843, modelo LDF)
+# Que hace: sensibilidad del llenado al coeficiente LDF k y al tiempo de llenado t_carga.
+# Mismo estanque y masa que el Test 13 (21,08g), con cuatro tiempos de llenado:
+# 1042s (Test 13), 540s (mencionado CR1), 300s y 180s, y 5 valores de k (pellets de 2mm a 10cm): 20 corridas más 4 en equilibrio
+# Para cada caso calcula el H2 cargado hasta la presion limite (la final del caso en equilibrio).
+# Como correr: en PowerShell poner julia --project=. proyecto_8/ldf_sensibilidad_carga.jl 
+# Salida: en proyecto_8/resultados_F4/ldf_sensibilidad_carga.csv (despues la leen fig2_h2_vs_N.jl, tabla1_h2_cargado.jl y fig_ldf_kT.jl)
 
-ENV["GKSwstype"] = "100"
 include("ldf_cycle_runner.jl")
-using Plots
+carpeta = joinpath(@__DIR__, "resultados_F4")
 
 #Parametros del Test 13
 prm = build_parameters(13; dr_factor=8.0)
@@ -24,7 +26,7 @@ function correr_carga(k, t_carga)
     return sol, m_in
 end
 
-#Funcion para ver H2 cargado hasta la presion limite. Busco el el nstante en que la presion llega al limite y calculo la masa inyectada
+#Funcion para ver H2 cargado hasta la presion limite. Busco el el instante en que la presion llega al limite y calculo la masa inyectada
 function h2_hasta_presion(sol, m_in, P_lim)
     t_carga = sol.t[end]
     t_malla = range(0, t_carga, length=2001)
@@ -65,18 +67,8 @@ end
 
 show(tabla, allrows=true, allcols=true)
 println()
-mkpath(joinpath(@__DIR__,"outputs"))
-CSV.write(joinpath(@__DIR__, "outputs", "ldf_sensibilidad_carga.csv"), tabla)
+mkpath(carpeta)
+CSV.write(joinpath(carpeta, "ldf_sensibilidad_carga.csv"), tabla)
 
-#Figura H2 cargado v/s N = k*t_llenado
-marcadores = Dict(1042.0=>:circle, 540.0=>:diamond, 300.0=>:square, 180.0=>:utriangle)
-etiquetas = Dict(1042.0=>"17 min (Test 13)", 540.0=>"9 min (CR1)", 300.0=> "5 min", 180.0=>"3 min")
-fig_h2 = plot(xscale=:log10, xlabel="N = k*t_llenado", ylabel="H2 carga hasta P límite", legend=:bottomright, size=(800,550), ylims=(45,101))
-hline!(fig_h2, [99, 95], color=:gray, linestyle=:dash, label="99% y 95%")
-for t_c in t_cargas
-    filas = tabla[tabla.t_carga_s .== t_c, :]
-    plot!(fig_h2, filas.N, filas.H2_cargado_pct, marker=marcadores[t_c], markersize=6, linewidth=1.5, label="Llenado en " * etiquetas[t_c])
-end 
-
-savefig(fig_h2, joinpath(@__DIR__, "outputs", "ldf_sensibilidad_H2.svg"))
-display(fig_h2)
+mkpath(carpeta)
+CSV.write(joinpath(carpeta, "ldf_sensibilidad_carga.csv"), tabla)
