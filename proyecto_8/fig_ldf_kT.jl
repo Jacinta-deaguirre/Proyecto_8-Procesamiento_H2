@@ -35,6 +35,6 @@ for fila in eachrow(kT[kT.E_a_kJ_mol .== 0.0, :])
         text(pellet[fila.k_1_s]*" · " * llenado[fila.t_carga_s], 8, :left, :black))
 end
 
-savefig(fig, joinpath(joinpath(@__DIR__, "resultados_F4"), "ldf_sensibilidad_kT.svg"))
-savefig(fig, joinpath(joinpath(@__DIR__, "resultados_F4"), "ldf_sensibilidad_kT.png"))
+savefig(fig, joinpath(joinpath(@__DIR__, "resultados_F4"), "fig4_sensibilidad_kT.svg"))
+savefig(fig, joinpath(joinpath(@__DIR__, "resultados_F4"), "fig4_sensibilidad_kT.png"))
 display(fig)
