@@ -1,4 +1,4 @@
-# ldf_verification.jl - Proyecto 8 (IIQ3843, modelo LDF)
+# ldf_verificacion.jl - Proyecto 8 (IIQ3843, modelo LDF)
 # Que hace: simula la carga del Test 13 con los mismos parámetros de finite_model_xiao.jl
 # Con tres valores del coeficiente LDF k:
 # k = inf : debe dar el modelo base
@@ -86,7 +86,7 @@ Pᵢ = 0.033e6 # Initial pressure / Pa
 t_f = 1042.0 # Final time // s
 
 function correr_carga(k; reltol=1e-3, abstol=1e-6)
-    #Operación: U, T_air, caudal, T del H2 entrante y k (5 agrumentos)
+    #Operación: U, T_air, caudal, T del H2 entrante y k (5 argumentos)
     op = OperationalParameters(U, T_air, m_in, T_H2, k) 
     #Ficha del sistema con isoterma, material, geometría y operacion
     par = AdsorptionParameters(MDA_params, material_props, geometric_params, op) 

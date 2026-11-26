@@ -1,12 +1,10 @@
-# Copia de cycle_runner.jl con el modelo LDF (Proyecto 8)
-#Full charge -> storage -> discharge cycle runner built on the package residual
-# `MDA_adsorption!`. Used by grid_study.jl and sensitivity_study.jl; the stage scripts
-# finite_model_xiao*.jl solve exactly the same DAE and additionally write the figures.
-#
-#   include("cycle_runner.jl")
-#   res = run_cycle(13; dr_factor=1.0, reltol=1e-3, abstol=1e-6)
-#
-# `res` is a Dict with the per-stage solutions and a summary DataFrame (1 s output).
+# ldf_cycle_runner.jl - Proyecto 8 (IIQ3843, modelo LDF)
+# Copia de cycle_runner.jl (código original) con el coeficiente LDF k
+# No se corre solo (lo cargan los scripts al poner include("ldf_cycle_runner.jl"))
+#Funciones:
+#   build_parameters (13; dr_factor=8.0): parámetros del test 13
+#   run_cycle(13; k=0.03, dr_factor=8.0): simula carga -> reposo -> descarga con LDF y nₐ pasa de una etapa a la siguiente.
+#   Devuelve un Dict con "summary" (DataFrame cada 1s), "sols" (solución de cada etapa), "params" y "timing" (segundos de cómputo por etapa)
 using HydrogenAdsorption
 using Sundials
 using Statistics

@@ -1,10 +1,10 @@
-#ldf_validacion_analitica.jl - Proyrcto 8 (IIQ3843, modelo LDF)
+#ldf_validacion_analitica.jl - Proyecto 8 (IIQ3843, modelo LDF)
 # Que hace: validacion del modelo LDF contra solucion analitica (T, P y k constantes):
 # n_a(t) = n_eq*(1-exp(-k*t))
 #Caso: estanque presurizado a 9MPa, sin flujo, T inicial (281K) e inicialmente vacío (n_a = 0),
-#       con casi nada de carbón, así lo adsorbido no cambia P ni t
+#       con casi nada de carbón, así lo adsorbido no cambia P ni T
 # Prueba 5 valores de k (de 3 a 0,0012 1/s)
-# Como correr: en PowerShell poner julia --project=. proyecto_8/verificacion_F3/ldf_validacion_analitica.csv
+# Como correr: en PowerShell poner julia --project=. proyecto_8/ldf_validacion_analitica.jl
 # Salida: en proyecto_8/verificacion_F3/ -> ldf_validacion_analitica.csv y ldf_validacion_analitica.svg
 
 ENV["GKSwstype"] = "100" #guarda los gráficos sin abrir ventanas
