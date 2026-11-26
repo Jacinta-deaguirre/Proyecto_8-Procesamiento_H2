@@ -23,7 +23,7 @@ function correr_carga(k, t_carga; E_a = 0.0)
     return sol, m_in
 end
 
-#Funcion para ver H2 cargado hasta la presion limite. Busco el el nstante en que la presion llega al limite y calculo la masa inyectada
+#Funcion para ver H2 cargado hasta la presion limite. Busco el instante en que la presion llega al limite y calculo la masa inyectada
 function h2_hasta_presion(sol, m_in, P_lim)
     t_carga = sol.t[end]
     t_malla = range(0, t_carga, length=2001)
