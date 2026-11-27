@@ -19,4 +19,4 @@ El modelo base de HydrogenAdsorption.jl supone equilibrio instántaneo de adsorc
 -proyecto_8\verificacion_F3 -> Resultados de la verificación (Fase 3)
 -proyecto_8\resultados_F4 -> Datos, figuras y tabla del informe (Fase 4)
 
-Cada código se corre en PowerShell con julia --project=. proyecto_8/<script>.jl
+Cada código se corre en PowerShell con julia --project=. proyecto_8/nombre.jl
